@@ -1,0 +1,39 @@
+# Recommended .env Settings — Varient CMS
+# Stance Auto Magazine Addon
+#
+# These are recommended settings for a live production environment.
+# Your .env file is at the root of your site (same level as index.php)
+# Make sure .env is protected in your .htaccess (already included in the addon .htaccess)
+#
+# IMPORTANT: Never commit your .env file to GitHub or any public repository.
+
+#--------------------------------------------------------------------
+# ENVIRONMENT
+#--------------------------------------------------------------------
+# Use 'production' on your live site for better performance and security
+# Use 'development' only on a local development environment
+CI_ENVIRONMENT = production
+
+#--------------------------------------------------------------------
+# APP
+#--------------------------------------------------------------------
+# Must match your live site URL exactly including https:// and trailing slash
+app.baseURL = https://yoursite.co.uk/
+
+#--------------------------------------------------------------------
+# COOKIE
+#--------------------------------------------------------------------
+# Cookie prefix used by Varient CMS session system
+# Do NOT add quotes around the value
+cookie.prefix = vr
+
+#--------------------------------------------------------------------
+# DATABASE
+#--------------------------------------------------------------------
+database.default.hostname = 127.0.0.1
+database.default.database = your_database_name
+database.default.username = your_database_username
+database.default.password = your_database_password
+database.default.DBDriver = MySQLi
+database.default.DBPrefix =
+database.default.port = 3306
