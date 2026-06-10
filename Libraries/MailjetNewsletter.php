@@ -1,26 +1,5 @@
 <?php
 
-/**
- * MailjetNewsletter Library
- * Varient CMS Addon — Stance Auto Magazine
- *
- * Sends a newsletter notification to all subscribers when a new post is published.
- * Uses the Mailjet API v3.1 with bulk sending (single API call for all subscribers)
- * and full open/click tracking visible in your Mailjet dashboard.
- *
- * INSTALLATION:
- * 1. Drop this file into app/Libraries/MailjetNewsletter.php
- * 2. Make sure your Mailjet API key, secret key, and email address are configured
- *    in your Varient CMS admin under Settings > Email Settings
- * 3. Add the newsletter trigger to your PostController (see Controllers/PostController_newsletter_snippet.php)
- * 4. Add the newsletter checkbox to your publish box view (see Views/_publish_box.php)
- *
- * REQUIREMENTS:
- * - Mailjet account with API key and secret key
- * - PHP curl extension enabled
- * - Varient CMS general_settings table must have: mailjet_api_key, mailjet_secret_key, mailjet_email_address
- */
-
 namespace App\Libraries;
 
 class MailjetNewsletter
@@ -32,25 +11,21 @@ class MailjetNewsletter
         $settings = $db->table('general_settings')->get()->getRowObject();
 
         if (empty($settings->mailjet_api_key) || empty($settings->mailjet_secret_key)) {
+            log_message('error', 'MailjetNewsletter: Missing API credentials');
             return false;
         }
 
         // Get all subscribers
         $subscribers = $db->table('subscribers')->get()->getResultObject();
         if (empty($subscribers)) {
+            log_message('error', 'MailjetNewsletter: No subscribers found');
             return false;
-        }
-
-        // Build recipient list for bulk send (single API call for all subscribers)
-        $recipients = [];
-        foreach ($subscribers as $subscriber) {
-            $recipients[] = ['Email' => $subscriber->email];
         }
 
         // Build the featured image URL
         $imageUrl = !empty($post->image_big) ? base_url($post->image_big) : '';
 
-        // Build a clean excerpt (strip HTML tags, limit to 200 characters)
+        // Build a clean excerpt
         $excerpt = !empty($post->description) ? strip_tags($post->description) : '';
         $excerpt = strlen($excerpt) > 200 ? substr($excerpt, 0, 200) . '...' : $excerpt;
 
@@ -78,33 +53,69 @@ class MailjetNewsletter
             </div>
         </div>';
 
-        // Send as a single bulk API call to all subscribers
-        // CustomCampaign uses a timestamp so each send appears separately in Mailjet dashboard
-        $payload = json_encode([
-            'Messages' => [[
+        $subject = 'New Post: ' . $post->title;
+        $fromEmail = $settings->mailjet_email_address ?? 'stanceautomagmedia@gmail.com';
+        $campaignName = 'NewPost_' . date('Ymd_His');
+
+        // Build one message per recipient (required for per-recipient tracking in v3.1)
+        $messages = [];
+        foreach ($subscribers as $subscriber) {
+            $messages[] = [
                 'From' => [
-                    'Email' => $settings->mailjet_email_address ?? 'your@email.com',
+                    'Email' => $fromEmail,
                     'Name'  => 'Stance Auto Magazine'
                 ],
-                'To' => $recipients,
-                'Subject' => 'New Post: ' . $post->title,
+                'To' => [['Email' => $subscriber->email]],
+                'Subject' => $subject,
                 'HTMLPart' => $html,
                 'TrackOpens' => 'enabled',
                 'TrackClicks' => 'enabled',
-                'CustomCampaign' => 'NewPost_' . date('Ymd_His'),
+                'CustomCampaign' => $campaignName,
                 'DeduplicateCampaign' => false
-            ]]
-        ]);
+            ];
+        }
 
-        $ch = curl_init('https://api.mailjet.com/v3.1/send');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-        curl_setopt($ch, CURLOPT_USERPWD, $settings->mailjet_api_key . ':' . $settings->mailjet_secret_key);
-        curl_exec($ch);
-        curl_close($ch);
+        // Mailjet v3.1 accepts up to 50 messages per API call — chunk accordingly
+        $chunks = array_chunk($messages, 50);
+        $totalSent = 0;
+        $errors = [];
 
-        return true;
+        foreach ($chunks as $chunk) {
+            $payload = json_encode(['Messages' => $chunk]);
+
+            $ch = curl_init('https://api.mailjet.com/v3.1/send');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            curl_setopt($ch, CURLOPT_USERPWD, $settings->mailjet_api_key . ':' . $settings->mailjet_secret_key);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            curl_close($ch);
+
+            if ($curlError) {
+                log_message('error', 'MailjetNewsletter: cURL error - ' . $curlError);
+                $errors[] = $curlError;
+                continue;
+            }
+
+            $decoded = json_decode($response, true);
+
+            if ($httpCode !== 200) {
+                log_message('error', 'MailjetNewsletter: HTTP ' . $httpCode . ' - ' . $response);
+                $errors[] = 'HTTP ' . $httpCode;
+                continue;
+            }
+
+            $sent = isset($decoded['Messages']) ? count($decoded['Messages']) : 0;
+            $totalSent += $sent;
+            log_message('info', 'MailjetNewsletter: Chunk sent - ' . $sent . ' messages, HTTP ' . $httpCode . ' - ' . $response);
+        }
+
+        log_message('info', 'MailjetNewsletter: Complete - ' . $totalSent . ' sent, ' . count($errors) . ' errors');
+
+        return empty($errors);
     }
 }
